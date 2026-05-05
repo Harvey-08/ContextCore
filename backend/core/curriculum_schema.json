@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "required": [
+    "topic_id",
+    "topic_name",
+    "unit",
+    "learning_objectives",
+    "allowed_concepts",
+    "disallowed_concepts",
+    "content_blocks"
+  ],
+  "properties": {
+    "topic_id": { "type": "string" },
+    "topic_name": { "type": "string" },
+    "unit": { "type": "string" },
+    "learning_objectives": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allowed_concepts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "disallowed_concepts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "content_blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["block_id", "type", "text"],
+        "properties": {
+          "block_id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["definition", "explanation", "example"]
+          },
+          "text": { "type": "string" }
+        }
+      }
+    }
+  }
+}
