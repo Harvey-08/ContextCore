@@ -1,0 +1,29 @@
+# Environment variables
+**/.env*
+
+# Python 
+**/__pycache__/
+*.py[cod]
+*$py.class
+**/env/
+**/venv/
+**/.venv/
+**/build/
+**/dist/
+*.egg-info/
+
+# Frontend 
+**/node_modules/
+**/dist-ssr/
+
+# Project Specific
+generated_contents/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
