@@ -3,9 +3,6 @@ import json
 from dotenv import load_dotenv
 import warnings
 
-# Suppress warnings from google.generativeai deprecation
-warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
-# Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 load_dotenv()
