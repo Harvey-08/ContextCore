@@ -8,11 +8,153 @@ import Dashboard from './components/Dashboard'
 import QuizTaker from './components/QuizTaker'
 import LandingPage from './components/LandingPage'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE;
+
+// Global Axios Interceptors for JWT Authentication
+axios.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('context_core_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      const activeToken = localStorage.getItem('context_core_token');
+      if (activeToken) {
+        localStorage.removeItem('context_core_token');
+        localStorage.removeItem('context_core_user_email');
+        window.location.reload();
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 // --- SUB COMPONENTS ---
 
-const Header = ({ systemOnline, onHome }) => (
+const AuthView = ({ setToken, setUserEmail, setUserName, setLearnerLevel, API_BASE }) => {
+  const [isLogin, setIsLogin] = useState(true)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [name, setName] = useState('')
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError(null)
+    setLoading(true)
+    try {
+      const endpoint = isLogin ? '/auth/login' : '/auth/signup'
+      const payload = isLogin ? { email, password } : { email, password, name }
+      const res = await axios.post(`${API_BASE}${endpoint}`, payload)
+      const { token, email: resEmail, name: resName, current_level } = res.data
+      
+      localStorage.setItem('context_core_token', token)
+      localStorage.setItem('context_core_user_email', resEmail)
+      localStorage.setItem('context_core_user_name', resName || '')
+      localStorage.setItem('context_core_learner_level', current_level || 'Beginner')
+      
+      setToken(token)
+      setUserEmail(resEmail)
+      setUserName(resName || '')
+      setLearnerLevel(current_level || 'Beginner')
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Authentication failed. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="glass-panel p-8 max-w-md w-full shadow-lg border border-slate-200">
+        <div className="text-center mb-8">
+          <h2 className="text-3xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-teal-600 to-blue-600" style={{ background: 'linear-gradient(to right, #14bf96, #3498db)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            Teaching Assistant
+          </h2>
+          <p className="text-slate-500 text-sm mt-2">Personalized Learning-Aware Tutor Agent</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5" autoComplete="off">
+          {!isLogin && (
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Full Name</label>
+              <input 
+                type="text" 
+                required 
+                value={name} 
+                onChange={e => setName(e.target.value)} 
+                placeholder="John Doe" 
+                autoComplete="off"
+                className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
+              />
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Email Address</label>
+            <input 
+              type="email" 
+              required 
+              value={email} 
+              onChange={e => setEmail(e.target.value)} 
+              placeholder="you@example.com" 
+              autoComplete="off"
+              className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Password</label>
+            <input 
+              type="password" 
+              required 
+              value={password} 
+              onChange={e => setPassword(e.target.value)} 
+              placeholder="••••••••" 
+              autoComplete="new-password"
+              className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
+            />
+          </div>
+
+          {error && (
+            <div className="p-3 bg-red-50 text-red-600 rounded-lg text-xs font-semibold flex items-center gap-2 border border-red-150">
+              <AlertCircle size={16} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button 
+            type="submit" 
+            disabled={loading} 
+            className="w-full btn-primary py-3 font-semibold flex justify-center items-center gap-2"
+          >
+            {loading ? <div className="loader-spinner !w-5 !h-5 border-white border-t-transparent animate-spin rounded-full border-2"></div> : (isLogin ? 'Sign In' : 'Create Account')}
+          </button>
+        </form>
+
+        <div className="text-center mt-6">
+          <button 
+            onClick={() => { setIsLogin(!isLogin); setError(null); }} 
+            className="text-sm font-medium text-teal-600 hover:text-teal-800 transition-colors focus:outline-none"
+          >
+            {isLogin ? "Don't have an account? Sign Up" : "Already have an account? Log In"}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+const Header = ({ systemOnline, onHome, userName, onLogout }) => (
   <div className="fixed top-0 w-full glass-panel z-50 px-6 py-4 flex justify-between items-center rounded-none border-t-0 border-x-0">
     <div onClick={onHome} className="cursor-pointer group">
       <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-teal-600 to-blue-600 group-hover:opacity-80 transition-opacity" style={{ background: 'linear-gradient(to right, #14bf96, #3498db)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
@@ -20,12 +162,26 @@ const Header = ({ systemOnline, onHome }) => (
       </h1>
       <p className="text-xs text-slate-500">AI-Powered Curriculum Content Generator</p>
     </div>
-    <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-sm">
-      <div className={`status-dot-active ${!systemOnline && '!bg-red-500 !animate-none'}`}></div>
-      <span className="text-xs font-semibold text-slate-600">{systemOnline ? 'System Online' : 'Backend Offline'}</span>
+    <div className="flex items-center gap-4">
+      {userName && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">{userName}</span>
+          <button 
+            onClick={onLogout} 
+            className="text-xs font-bold text-red-500 hover:text-red-700 bg-red-50 border border-red-200 px-3 py-1 rounded-full transition-colors focus:outline-none"
+          >
+            Logout
+          </button>
+        </div>
+      )}
+      <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-sm">
+        <div className={`status-dot-active ${!systemOnline && '!bg-red-500 !animate-none'}`}></div>
+        <span className="text-xs font-semibold text-slate-600">{systemOnline ? 'System Online' : 'Backend Offline'}</span>
+      </div>
     </div>
   </div>
 )
+
 
 const LandingView = ({ isProcessing, handleUpload, files, setSelectedFile, setPhase }) => (
   <div className="pt-24 min-h-screen flex items-center justify-center p-6">
@@ -193,7 +349,7 @@ const VideoGallery = ({ data }) => {
   )
 }
 
-const DashboardView = ({ setPhase, selectedFile, selectedTopicIndex, setSelectedTopicIndex, selectedType, setSelectedType, handleGenerate }) => (
+const DashboardView = ({ setPhase, selectedFile, selectedTopicIndex, setSelectedTopicIndex, selectedType, setSelectedType, handleGenerate, learnerLevel, setLearnerLevel }) => (
   <div className="pt-24 px-6 max-w-6xl mx-auto pb-20">
     <div className="flex justify-between items-center mb-6">
       <button onClick={() => setPhase('landing')} className="text-slate-500 hover:text-teal-600 flex items-center gap-1 text-sm font-medium"> Back to Upload</button>
@@ -222,8 +378,24 @@ const DashboardView = ({ setPhase, selectedFile, selectedTopicIndex, setSelected
             </div>
           </div>
 
+          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2 mt-4">Learner Level</h3>
+          <div className="relative mb-6">
+            <select
+              value={learnerLevel}
+              onChange={(e) => setLearnerLevel(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-400 shadow-sm transition-all"
+            >
+              <option value="Beginner">Beginner Tier</option>
+              <option value="Intermediate">Intermediate Tier</option>
+              <option value="Advanced">Advanced Tier</option>
+            </select>
+            <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+              Adapts AI explanations, timeline pacing, quiz questions, and chatbot responses.
+            </p>
+          </div>
+
           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Select Topic</h3>
-          <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+          <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
             {selectedFile?.topics.map((topic, idx) => (
               <div
                 key={idx}
@@ -318,7 +490,7 @@ const GeneratingView = ({ processingText }) => (
   </div>
 )
 
-const ResultsView = ({ selectedType, selectedFile, selectedTopicIndex, generationResult, setPhase }) => (
+const ResultsView = ({ selectedType, selectedFile, selectedTopicIndex, generationResult, setPhase, token }) => (
   <div className="pt-24 px-6 max-w-4xl mx-auto pb-20 text-center">
     <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="glass-panel p-10">
       <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -358,13 +530,13 @@ const ResultsView = ({ selectedType, selectedFile, selectedTopicIndex, generatio
               controls
               autoPlay
               className="w-full h-auto block"
-              src={`${API_BASE}${generationResult?.data?.file_url}`}
+              src={`${API_BASE}${generationResult?.data?.file_url}?token=${token}`}
             >
               Your browser does not support the video tag.
             </video>
           </div>
           <a
-            href={`${API_BASE}/download/${generationResult?.data?.file_url.split('/').pop()}`}
+            href={`${API_BASE}/download/${generationResult?.data?.file_url.split('/').pop()}?token=${token}`}
             download
             className="flex items-center gap-2 text-slate-500 hover:text-teal-600 transition-colors"
           >
@@ -375,13 +547,13 @@ const ResultsView = ({ selectedType, selectedFile, selectedTopicIndex, generatio
         <div className="flex flex-col items-center gap-6">
           <div className="relative rounded-xl overflow-hidden shadow-2xl border border-slate-200 bg-slate-50 w-full max-w-4xl h-[600px]">
             <iframe
-              src={`${API_BASE}/outputs/${generationResult?.data?.file_url.split('/').pop()}#toolbar=0`}
+              src={`${API_BASE}/outputs/${generationResult?.data?.file_url.split('/').pop()}?token=${token}#toolbar=0`}
               className="w-full h-full"
               title="PDF Preview"
             />
           </div>
           <a
-            href={`${API_BASE}/download/${generationResult?.data?.file_url.split('/').pop()}`}
+            href={`${API_BASE}/download/${generationResult?.data?.file_url.split('/').pop()}?token=${token}`}
             download
             target="_blank"
             className="flex items-center gap-2 text-slate-500 hover:text-teal-600 transition-colors"
@@ -447,10 +619,31 @@ const FolderAccordion = ({ folder, isOpen, onToggle, onSelectFile }) => (
 // --- MAIN APP ---
 
 function App() {
+  const [token, setToken] = useState(() => localStorage.getItem('context_core_token') || null)
+  const [userEmail, setUserEmail] = useState(() => localStorage.getItem('context_core_user_email') || null)
+  const [userName, setUserName] = useState(() => localStorage.getItem('context_core_user_name') || null)
+  
+  const handleLogout = () => {
+    localStorage.removeItem('context_core_token');
+    localStorage.removeItem('context_core_user_email');
+    localStorage.removeItem('context_core_user_name');
+    localStorage.removeItem('context_core_learner_level');
+    localStorage.removeItem('context_core_selected_file');
+    localStorage.removeItem('context_core_topic_idx');
+    localStorage.removeItem('context_core_selected_type');
+    localStorage.removeItem('context_core_gen_result');
+    setToken(null);
+    setUserEmail(null);
+    setUserName(null);
+    setIsLanding(true);
+    setPhase('landing');
+  }
+
   const [phase, setPhase] = useState('landing')
   const [isLanding, setIsLanding] = useState(true)
   const [folders, setFolders] = useState([]) // Changed from files to folders
   const [openFolders, setOpenFolders] = useState({})
+  const [learnerLevel, setLearnerLevel] = useState(() => localStorage.getItem('context_core_learner_level') || 'Beginner')
 
   const [selectedFile, setSelectedFile] = useState(() => {
     const saved = localStorage.getItem('context_core_selected_file')
@@ -484,6 +677,8 @@ function App() {
   const [currentMessage, setCurrentMessage] = useState('')
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [isListening, setIsListening] = useState(false)
+  const [openCitationIdx, setOpenCitationIdx] = useState(null)
+  const [openAuditIdx, setOpenAuditIdx] = useState(null)
 
   // Status check
   const [systemOnline, setSystemOnline] = useState(false)
@@ -498,13 +693,36 @@ function App() {
     return () => clearInterval(statusInterval)
   }, [])
 
-  // Auto-fetch files when system comes online
+  // Auto-fetch files and profile when system comes online (only if authenticated)
   useEffect(() => {
-    if (systemOnline) {
+    if (systemOnline && token) {
       fetchFiles()
+      fetchProfile()
     }
-  }, [systemOnline])
+  }, [systemOnline, token])
 
+  const fetchProfile = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/learner/profile`)
+      if (res.data && res.data.current_level) {
+        setLearnerLevel(res.data.current_level)
+      }
+    } catch (e) {
+      console.error("Failed to fetch learner profile", e)
+    }
+  }
+
+  const updateLearnerLevel = async (newLevel) => {
+    setLearnerLevel(newLevel)
+    localStorage.setItem('context_core_learner_level', newLevel)
+    if (systemOnline) {
+      try {
+        await axios.post(`${API_BASE}/learner/profile`, { current_level: newLevel })
+      } catch (e) {
+        console.error("Failed to update profile level in DB", e)
+      }
+    }
+  }
 
   // State Persistence: Save to LocalStorage
   useEffect(() => {
@@ -514,6 +732,7 @@ function App() {
     localStorage.setItem('context_core_topic_idx', selectedTopicIndex.toString())
     if (selectedType) localStorage.setItem('context_core_selected_type', selectedType)
     if (generationResult) localStorage.setItem('context_core_gen_result', JSON.stringify(generationResult))
+    localStorage.setItem('context_core_learner_level', learnerLevel)
 
     // Clear results if going back to landing
     if (phase === 'landing') {
@@ -521,7 +740,7 @@ function App() {
       localStorage.removeItem('context_core_selected_type')
       localStorage.removeItem('context_core_gen_result')
     }
-  }, [phase, isLanding, selectedFile, selectedTopicIndex, selectedType, generationResult])
+  }, [phase, isLanding, selectedFile, selectedTopicIndex, selectedType, generationResult, learnerLevel])
 
   const checkSystem = async () => {
     try {
@@ -622,7 +841,8 @@ function App() {
       }
       const payload = {
         filename: selectedFile.filename, // This contains relative path now
-        topic_index: selectedTopicIndex
+        topic_index: selectedTopicIndex,
+        difficulty: learnerLevel
       }
 
       if (targetType === 'video') {
@@ -668,11 +888,15 @@ function App() {
     setCurrentMessage('')
     setIsChatLoading(true)
     try {
-      const res = await axios.post(`${API_BASE}/chat`, { message: userMsg.content })
+      const res = await axios.post(`${API_BASE}/chat`, { 
+        message: userMsg.content,
+        difficulty: learnerLevel
+      })
       setChatMessages(prev => [...prev, {
         role: 'assistant',
         content: res.data.answer,
-        sources: res.data.sources || []
+        sources: res.data.sources || [],
+        ragas_scores: res.data.ragas_scores || null
       }])
     } catch (e) {
       setChatMessages(prev => [...prev, { role: 'assistant', content: "Error: Could not connect to Chatbot." }])
@@ -739,9 +963,26 @@ function App() {
     }} />;
   }
 
+  if (!token) {
+    return (
+      <AuthView 
+        setToken={setToken} 
+        setUserEmail={setUserEmail} 
+        setUserName={setUserName}
+        setLearnerLevel={setLearnerLevel} 
+        API_BASE={API_BASE} 
+      />
+    )
+  }
+
   return (
     <div className="min-h-screen bg-soft">
-      <Header systemOnline={systemOnline} onHome={() => setIsLanding(true)} />
+      <Header 
+        systemOnline={systemOnline} 
+        onHome={() => setIsLanding(true)} 
+        userName={userName} 
+        onLogout={handleLogout} 
+      />
 
       <AnimatePresence mode='wait'>
         {phase === 'landing' && (
@@ -804,6 +1045,8 @@ function App() {
             selectedType={selectedType}
             setSelectedType={setSelectedType}
             handleGenerate={handleGenerate}
+            learnerLevel={learnerLevel}
+            setLearnerLevel={updateLearnerLevel}
           />
         )}
         {phase === 'dashboard-analytics' && (
@@ -818,6 +1061,7 @@ function App() {
             selectedTopicIndex={selectedTopicIndex}
             generationResult={generationResult}
             setPhase={setPhase}
+            token={token}
           />
         )}
       </AnimatePresence>
@@ -853,13 +1097,147 @@ function App() {
                       </button>
                     )}
 
-                    {/* Display Sources */}
-                    {msg.sources && msg.sources.length > 0 && (
-                      <div className="mt-2 text-[10px] text-slate-400 max-w-[85%] bg-slate-50 p-2 rounded border border-slate-100">
-                        <div className="font-bold mb-1"> Sources:</div>
-                        {msg.sources.map((s, i) => (
-                          <div key={i} className="truncate"> {s.topic}</div>
-                        ))}
+                    {/* Collapsible Citations & Reliability Audit Panel */}
+                    {(msg.sources && msg.sources.length > 0) && (
+                      <div className="mt-2 w-[90%] self-start space-y-2">
+                        <div className="flex items-center gap-3">
+                          {msg.sources && msg.sources.length > 0 && (
+                            <button 
+                              onClick={() => { setOpenCitationIdx(openCitationIdx === idx ? null : idx); setOpenAuditIdx(null); }}
+                              className={`flex items-center gap-1 text-[10px] font-bold transition-colors focus:outline-none ${openCitationIdx === idx ? 'text-teal-800' : 'text-teal-600 hover:text-teal-800'}`}
+                            >
+                              <span>📚 Citations</span>
+                              <span className="text-[8px]">{openCitationIdx === idx ? '▲' : '▼'}</span>
+                            </button>
+                          )}
+                          
+                          {msg.ragas_scores && (
+                            <button 
+                              onClick={() => { setOpenAuditIdx(openAuditIdx === idx ? null : idx); setOpenCitationIdx(null); }}
+                              className={`flex items-center gap-1 text-[10px] font-bold transition-colors focus:outline-none ${openAuditIdx === idx ? 'text-indigo-800' : 'text-indigo-600 hover:text-indigo-800'}`}
+                            >
+                              <span>🔍 Reliability Audit</span>
+                              <span className="text-[8px]">{openAuditIdx === idx ? '▲' : '▼'}</span>
+                            </button>
+                          )}
+                        </div>
+                        
+                        {/* Citation Panel */}
+                        {openCitationIdx === idx && (
+                          <motion.div 
+                            initial={{ opacity: 0, height: 0 }} 
+                            animate={{ opacity: 1, height: 'auto' }}
+                            className="mt-1 bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-[10px] text-slate-600 space-y-2 max-h-[160px] overflow-y-auto custom-scrollbar"
+                          >
+                            {msg.sources.map((s, i) => {
+                              const blockType = (s.type || 'text').replace('content_', '').toUpperCase();
+                              const relevancePct = Math.round((s.relevance || 0) * 100);
+                              return (
+                                <div key={i} className="border-b border-slate-100 last:border-b-0 pb-1.5 last:pb-0">
+                                  <div className="flex justify-between items-center font-bold text-slate-500 mb-0.5">
+                                    <span>📖 {s.topic} ({blockType})</span>
+                                    <span className="text-teal-600">{relevancePct}% match</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-400 font-medium italic mb-1">
+                                    Subtopic: {s.subtopic || 'General'} | Difficulty: {s.difficulty || 'Intermediate'}
+                                  </div>
+                                  <p className="bg-white border border-slate-150 p-1.5 rounded text-slate-600 leading-relaxed font-sans select-all whitespace-pre-line">
+                                    "{s.text}"
+                                  </p>
+                                  {s.boost_reason && (
+                                    <div className="mt-1 text-[9px] text-amber-600 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5 font-medium leading-normal">
+                                      💡 {s.boost_reason}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </motion.div>
+                        )}
+
+                        {/* Reliability Audit Panel (RAGAS Metrics) */}
+                        {openAuditIdx === idx && msg.ragas_scores && (
+                          <motion.div 
+                            initial={{ opacity: 0, height: 0 }} 
+                            animate={{ opacity: 1, height: 'auto' }}
+                            className="mt-1 bg-indigo-50/50 border border-indigo-100 rounded-lg p-3 text-[10px] text-slate-700 space-y-2"
+                          >
+                            <div className="font-bold text-indigo-800 border-b border-indigo-100 pb-1 flex items-center justify-between">
+                              <span>🤖 RAGAS Reliability Audit</span>
+                              <span className="text-[9px] font-normal text-slate-500">LLM-graded</span>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-2">
+                              {/* Faithfulness */}
+                              <div className="bg-white p-2 rounded border border-slate-100">
+                                <div className="flex justify-between items-center font-semibold text-slate-600 mb-1">
+                                  <span>Faithfulness</span>
+                                  <span className={`font-bold ${msg.ragas_scores.faithfulness >= 0.8 ? 'text-green-600' : 'text-amber-500'}`}>
+                                    {Math.round(msg.ragas_scores.faithfulness * 100)}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full ${msg.ragas_scores.faithfulness >= 0.8 ? 'bg-green-500' : 'bg-amber-400'}`} 
+                                    style={{ width: `${msg.ragas_scores.faithfulness * 100}%` }}
+                                  ></div>
+                                </div>
+                                <p className="text-[8px] text-slate-400 mt-1 leading-tight">Grounding in textbook</p>
+                              </div>
+
+                              {/* Answer Relevancy */}
+                              <div className="bg-white p-2 rounded border border-slate-100">
+                                <div className="flex justify-between items-center font-semibold text-slate-600 mb-1">
+                                  <span>Answer Relevancy</span>
+                                  <span className={`font-bold ${msg.ragas_scores.answer_relevancy >= 0.8 ? 'text-green-600' : 'text-amber-500'}`}>
+                                    {Math.round(msg.ragas_scores.answer_relevancy * 100)}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full ${msg.ragas_scores.answer_relevancy >= 0.8 ? 'bg-green-500' : 'bg-amber-400'}`} 
+                                    style={{ width: `${msg.ragas_scores.answer_relevancy * 100}%` }}
+                                  ></div>
+                                </div>
+                                <p className="text-[8px] text-slate-400 mt-1 leading-tight">Query alignment</p>
+                              </div>
+
+                              {/* Context Precision */}
+                              <div className="bg-white p-2 rounded border border-slate-100">
+                                <div className="flex justify-between items-center font-semibold text-slate-600 mb-1">
+                                  <span>Context Precision</span>
+                                  <span className={`font-bold ${msg.ragas_scores.context_precision >= 0.8 ? 'text-green-600' : 'text-amber-500'}`}>
+                                    {Math.round(msg.ragas_scores.context_precision * 100)}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full ${msg.ragas_scores.context_precision >= 0.8 ? 'bg-green-500' : 'bg-amber-400'}`} 
+                                    style={{ width: `${msg.ragas_scores.context_precision * 100}%` }}
+                                  ></div>
+                                </div>
+                                <p className="text-[8px] text-slate-400 mt-1 leading-tight">Ranked relevance</p>
+                              </div>
+
+                              {/* Context Recall */}
+                              <div className="bg-white p-2 rounded border border-slate-100">
+                                <div className="flex justify-between items-center font-semibold text-slate-600 mb-1">
+                                  <span>Context Recall</span>
+                                  <span className={`font-bold ${msg.ragas_scores.context_recall >= 0.8 ? 'text-green-600' : 'text-amber-500'}`}>
+                                    {Math.round(msg.ragas_scores.context_recall * 100)}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full ${msg.ragas_scores.context_recall >= 0.8 ? 'bg-green-500' : 'bg-amber-400'}`} 
+                                    style={{ width: `${msg.ragas_scores.context_recall * 100}%` }}
+                                  ></div>
+                                </div>
+                                <p className="text-[8px] text-slate-400 mt-1 leading-tight">Concept coverage</p>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
                       </div>
                     )}
                   </div>
