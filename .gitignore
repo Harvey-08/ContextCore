@@ -18,6 +18,9 @@
 
 # Project Specific
 generated_contents/
+vector_store/
+backend/evaluation/
+*.sqlite3
 
 # IDE & OS
 .vscode/
