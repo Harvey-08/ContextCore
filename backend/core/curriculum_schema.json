@@ -39,6 +39,18 @@
           "text": { "type": "string" }
         }
       }
+    },
+    "pedagogical_profile": {
+      "type": "object",
+      "properties": {
+        "reasoning_style": { "type": "string" },
+        "pedagogy_style": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "assessment_style": { "type": "string" },
+        "content_nature": { "type": "string" }
+      }
     }
   }
 }

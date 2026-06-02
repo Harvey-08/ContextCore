@@ -1,14 +1,13 @@
 import json
 import os
+import sys
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Configuration
-# You can change this to any JSON file you want to process
-JSON_PATH = "class7/json_output/gegp105.json"
-TOPIC_INDEX = 0  # First topic: Parallel and Intersecting Lines
+# Paths are provided dynamically via function arguments or CLI
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 MAX_RESULTS = 5
 
@@ -64,39 +63,62 @@ def search_youtube(query, api_key, max_results=5):
         print(f" Unexpected Error: {e}")
         return []
 
-def get_videos_for_topic(json_path, topic_index):
+def _parse_grade_subject(json_path):
+    """
+    Infer grade and subject from the folder path.
+    Expected structure: .../Grade_X/Subject/json_output/file.json
+    Returns (grade_label, subject) e.g. ("Grade 7", "Math")
+    """
+    parts = Path(json_path).resolve().parts
+    grade_label = "General"
+    subject = "Education"
+    for i, part in enumerate(parts):
+        if part.lower().startswith("grade_"):
+            grade_label = part.replace("_", " ")
+            if i + 1 < len(parts) and parts[i + 1].lower() != "json_output":
+                subject = parts[i + 1]
+            break
+    return grade_label, subject
+
+def get_videos_for_topic(json_path, topic_index=0):
     """
     Load a topic from JSON and fetch relevant videos.
+    Grade and subject are inferred dynamically from the file path.
     """
     if not os.path.exists(json_path):
         print(f"File not found: {json_path}")
-        return
+        return None, []
 
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     if topic_index >= len(data):
         print(f" Topic index {topic_index} out of range.")
-        return
+        return None, []
 
     topic = data[topic_index]
     topic_name = topic['topic_name']
-    
-    # Construct a smart educational query
-    # "Class 7 Math Parallel and Intersecting Lines explanation"
-    query = f"Class 7 Math {topic_name} explanation"
-    
+
+    # Dynamically infer grade and subject from folder path
+    grade_label, subject = _parse_grade_subject(json_path)
+
+    # Construct a smart educational query using dynamic metadata
+    query = f"{grade_label} {subject} {topic_name} explanation"
+
     videos = search_youtube(query, YOUTUBE_API_KEY, MAX_RESULTS)
-    
+
     return topic_name, videos
 
-def main():
+def main(json_path, topic_index=0):
     print("="*60)
     print(" YouTube Educational Video Fetcher")
     print("="*60)
-    
-    topic_name, videos = get_videos_for_topic(JSON_PATH, TOPIC_INDEX)
-    
+
+    result = get_videos_for_topic(json_path, topic_index)
+    if result is None:
+        return
+    topic_name, videos = result
+
     if videos:
         print(f"\n Found {len(videos)} videos for '{topic_name}':\n")
         for i, vid in enumerate(videos, 1):
@@ -104,8 +126,8 @@ def main():
             print(f"    Channel: {vid['channel']}")
             print(f"    Link: {vid['url']}")
             print("-" * 40)
-            
-        # Optional: Save to a JSON file for other parts of your pipeline
+
+        # Save to a JSON file for other parts of the pipeline
         output = {
             "topic": topic_name,
             "videos": videos
@@ -117,4 +139,13 @@ def main():
         print("\n No videos found or API error.")
 
 if __name__ == "__main__":
-    main()
+    # CLI usage: python get_youtube_links.py <path_to_json> [topic_index]
+    from pathlib import Path
+    if len(sys.argv) < 2:
+        print("Usage: python get_youtube_links.py <path_to_json> [topic_index]")
+        print("Example: python get_youtube_links.py generated_contents/user1/content/Grade_7/Math/json_output/chapter1.json 0")
+        sys.exit(1)
+
+    json_path = sys.argv[1]
+    topic_idx = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    main(json_path, topic_idx)

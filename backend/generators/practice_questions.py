@@ -1,6 +1,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 from reportlab.lib.pagesizes import letter
@@ -10,27 +11,42 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
 from reportlab.lib.units import inch
 
+# Path patching for standalone run
+BASE_DIR = Path(__file__).parent.parent.parent.absolute()
+sys.path.append(str(BASE_DIR))
+from backend.core.schemas import Worksheet
+from backend.core.adaptive_prompts import get_generator_instructions
+
 # Load environment variables
 load_dotenv()
 
-# ============================================================================
 # CONFIGURATION
-# ============================================================================
 
 SCRIPT_DIR = Path(__file__).parent.absolute()
-# Allow flexibility for class6 or class7 based on existing folders, default to class7 as per recent changes
-BASE_DIR = SCRIPT_DIR / "class7" 
-INPUT_DIR = BASE_DIR / "json_output"
-OUTPUT_DIR = BASE_DIR / "practice_questions"
+# Dynamic pathing: look up generated_contents root for curriculum inputs
+GENERATED_DIR = SCRIPT_DIR.parent.parent / "generated_contents"
+INPUT_DIR = GENERATED_DIR
+OUTPUT_DIR = SCRIPT_DIR / "practice_questions"
 
 # Model configuration
 MODEL = "gemini-2.5-flash"
 
-# ============================================================================
 # LLM GENERATION
-# ============================================================================
 
-def generate_questions_from_json(json_content, filename):
+def _parse_curriculum_path(json_path):
+    """Dynamically parse grade and subject names from folder path structure."""
+    path_parts = Path(json_path).parts
+    grade_str = "7"
+    subject_str = "General Curriculum"
+    for part in path_parts:
+        if "grade" in part.lower():
+            grade_str = part.replace("Grade_", "").replace("grade_", "")
+        elif part.lower() in ["mathematics", "physics", "chemistry", "biology", "science", "english", "history"]:
+            subject_str = part
+    return grade_str, subject_str
+
+
+def generate_questions_from_json(json_content, filename, difficulty="Beginner", grade_str="7", subject_str="General Curriculum"):
     """
     Generate practice questions based on the curriculum JSON content.
     """
@@ -56,24 +72,31 @@ def generate_questions_from_json(json_content, filename):
             
         topics_context.append(topic_info)
 
+    level_guidance = get_generator_instructions(difficulty, "practice")
+
     prompt = f"""
-    You are a mathematics teacher creating a practice worksheet for Grade 7 students.
+    You are an expert teacher creating a practice worksheet for Grade {grade_str} students in {subject_str}.
     Based on the following curriculum topics and concepts, generate 15 high-quality practice questions.
+    
+    TARGET STUDENT LEVEL: {difficulty}
     
     Source Material:
     {json.dumps(topics_context, indent=2)}
     
+    PEDAGOGICAL DIFFICULTY GUIDELINES:
+    {level_guidance}
+    
     REQUIREMENTS:
     1. Generate exactly 15 questions total.
-    2. Section A: 5 Multiple Choice Questions (MCQs) with 4 options (A, B, C, D).
-    3. Section B: 5 Short Answer Questions (conceptual or simple calculation).
-    4. Section C: 5 Word Problems / Application Questions (requires higher order thinking).
+    2. Section A: 5 Multiple Choice Questions (MCQs) with 4 options (A, B, C, D) matching the student level guidelines.
+    3. Section B: 5 Short Answer Questions (conceptual or simple calculation aligned with the level).
+    4. Section C: 5 Word Problems / Application Questions (requires higher order thinking aligned with the level).
     5. Include an Answer Key at the end.
     
     OUTPUT FORMAT:
     Return ONLY a valid JSON object with this structure:
     {{
-      "worksheet_title": "Practice Worksheet: [Topic Name]",
+      "worksheet_title": "Practice Worksheet: [Topic Name] ({difficulty} Level)",
       "sections": [
         {{
           "section_name": "Section A: Multiple Choice",
@@ -101,44 +124,34 @@ def generate_questions_from_json(json_content, filename):
       ]
     }}
     """
-    
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not found in .env file")
         
+    import instructor
     from groq import Groq
-    client = Groq(api_key=api_key)
+    client = instructor.from_groq(Groq(api_key=api_key))
     
-    for attempt in range(3):
-        print(f" Attempt {attempt+1}/3 with Groq...")
-        try:
-            response = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are a helpful education assistant. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                response_format={"type": "json_object"}
-            )
-            
-            clean_text = response.choices[0].message.content.strip()
-            return json.loads(clean_text)
-            
-        except json.JSONDecodeError as e:
-            print(f"   JSON Decode Error: {e}. Retrying...")
-            if attempt == 2:
-                return None
-        except Exception as e:
-            print(f"   Error: {e}. Retrying...")
-            if attempt == 2:
-                return None
+    print("Generating practice worksheet with Groq and Instructor...")
+    try:
+        worksheet = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            response_model=Worksheet,
+            messages=[
+                {"role": "system", "content": "You are a helpful education assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_retries=2
+        )
+        return worksheet.model_dump()
+    except Exception as e:
+        print(f"Instructor Generation/Validation Failed: {e}")
+        return None
     
     return None
 
-# ============================================================================
 # PDF GENERATION
-# ============================================================================
 
 def create_pdf(data, output_path):
     """
@@ -231,11 +244,9 @@ def create_pdf(data, output_path):
         print(f" Error building PDF: {e}")
         return False
 
-# ============================================================================
 # MAIN
-# ============================================================================
 
-def run_practice_generator(json_path, output_path, topic_index=0):
+def run_practice_generator(json_path, output_path, topic_index=0, difficulty="Beginner"):
     print("="*60)
     print(" Mathematical Practice Question Generator")
     print("="*60)
@@ -257,12 +268,14 @@ def run_practice_generator(json_path, output_path, topic_index=0):
     verifier = ContentVerifier()
     source_context = str(target_data)
     
+    grade_str, subject_str = _parse_curriculum_path(json_path)
+    
     max_retries = 3
     question_data = None
     
     for attempt in range(max_retries):
         print(f"\n--- Practice Questions Generation Attempt {attempt + 1}/{max_retries} ---")
-        question_data = generate_questions_from_json(target_data, os.path.basename(json_path))
+        question_data = generate_questions_from_json(target_data, os.path.basename(json_path), difficulty, grade_str, subject_str)
         
         if not question_data:
             print("   [FAILED] AI generation failed to return data.")
@@ -306,7 +319,11 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
-    json_files = list(INPUT_DIR.glob("*.json"))
+    # Recursively find any curriculum files in sandboxed generated_contents
+    json_files = list(INPUT_DIR.rglob("*.json"))
+    # Filter out mappings or flashcards
+    json_files = [f for f in json_files if "json_output" in str(f) and not f.name.startswith("chapter_mapping") and not "flashcards" in f.name]
+    
     if not json_files:
         print(f" No JSON files found in {INPUT_DIR}")
         return
@@ -331,12 +348,14 @@ def main():
         verifier = ContentVerifier()
         source_context = str(content)
         
+        grade_str, subject_str = _parse_curriculum_path(json_file)
+        
         max_retries = 3
         question_data = None
         
         for attempt in range(max_retries):
             print(f"\n--- Practice Questions Generation Attempt {attempt + 1}/{max_retries} ---")
-            question_data = generate_questions_from_json(content, json_file.name)
+            question_data = generate_questions_from_json(content, json_file.name, "Beginner", grade_str, subject_str)
             
             if not question_data:
                 print("   [FAILED] AI generation failed to return data.")

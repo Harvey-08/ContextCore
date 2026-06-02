@@ -197,7 +197,7 @@ class TTSGenerator:
         
         return output_path, len(combined) / 1000.0  # Return path and duration in seconds
     
-    def generate_full_narration(self, use_edge_tts=True):
+    def generate_full_narration(self, use_edge_tts=True, merged_output_path=None):
         """Complete pipeline: spec  script  audio segments  merged audio"""
         # Load spec
         spec = self.load_spec()
@@ -209,7 +209,10 @@ class TTSGenerator:
         self.generate_all_audio_segments(script_segments, use_edge_tts=use_edge_tts)
         
         # Merge segments
-        audio_path, duration = self.merge_audio_segments()
+        if merged_output_path:
+            audio_path, duration = self.merge_audio_segments(output_path=merged_output_path)
+        else:
+            audio_path, duration = self.merge_audio_segments()
         
         return audio_path, duration
 

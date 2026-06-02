@@ -6,11 +6,10 @@ import pdfplumber
 from jsonschema import validate, ValidationError
 
 load_dotenv()
+from backend.core.schemas import BookMetadata, CurriculumTopicList
 
 
-# ============================================================================
 # CONFIGURATION - Load from config file
-# ============================================================================
 
 # Get script directory (where this file is located)
 SCRIPT_DIR = Path(__file__).parent.absolute()
@@ -18,26 +17,26 @@ ROOT_DIR = SCRIPT_DIR.parent
 
 # Centralized folder structure in generated_contents
 GENERATED_DIR = ROOT_DIR.parent / "generated_contents"
-BASE_DIR = GENERATED_DIR / "content" / "class7"
+# Base directory for global/fallback/manual processing
+BASE_DIR = GENERATED_DIR / "content" / "general"
 OUTPUT_DIR = BASE_DIR / "text_output"
 TEXT_DIR = BASE_DIR / "text_output"
 JSON_DIR = BASE_DIR / "json_output"
 SCHEMA_FILE = SCRIPT_DIR / "curriculum_schema.json"
 
 # Model and processing configuration
-# Model and processing configuration
 MODEL = "gemini-2.5-flash"
 CHUNK_SIZE = 3000  # Characters per chunk for processing large texts
 
-# Curriculum configuration
-GRADE_LEVEL = "7"
-SUBJECT = "Mathematics"
-CURRICULUM_TYPE = "NCERT"
+# Curriculum configuration (fully dynamic defaults)
+GRADE_LEVEL = "Unknown"
+SUBJECT = "General"
+CURRICULUM_TYPE = "General"
 
 # Default values for fallback
-DEFAULT_LEARNING_OBJECTIVE = "Understand the mathematical concepts presented"
-DEFAULT_ALLOWED_CONCEPT = "Basic mathematical operations"
-DEFAULT_DISALLOWED_CONCEPTS = ["Advanced calculus", "Complex numbers"]
+DEFAULT_LEARNING_OBJECTIVE = "Understand the curriculum concepts presented"
+DEFAULT_ALLOWED_CONCEPT = "Core topic concepts"
+DEFAULT_DISALLOWED_CONCEPTS = ["Advanced graduate level concepts"]
 
 # Initialize Groq client (requires GROQ_API_KEY from .env)
 api_key = os.getenv("GROQ_API_KEY")
@@ -66,33 +65,28 @@ def identify_book_metadata(pdf_path):
                     text_preview += page_text + "\n"
         
         if not text_preview.strip():
-            return {"grade": "Unknown", "subject": "General", "title": "Untitled"}
+            return {"grade": "Unknown", "subject": "General", "title": "Untitled", "curriculum": "Unknown"}
 
         prompt = f"""
-        Analyze the following text from the beginning of a textbook and extract:
-        1. Grade Level (Look for "Grade", "Class", "Class VII", "Class 7", "Standard", etc.)
-        2. Subject (e.g., "Mathematics", "Science")
-        3. Book Title
-        4. Curriculum Type (e.g., "NCERT", "CBSE")
-
-        Return ONLY a JSON object with these keys: "grade", "subject", "title", "curriculum".
-        For "grade", return ONLY the number (e.g., "7"). If it says "Class VII", return "7".
+        Analyze the following text from the beginning of a textbook and extract metadata:
         
         Text Preview:
         {text_preview[:4000]}
         """
 
-        response = groq_client.chat.completions.create(
+        import instructor
+        instructor_client = instructor.from_groq(groq_client)
+        meta = instructor_client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "You are a specialized AI that outputs ONLY valid JSON."},
+                {"role": "system", "content": "You are a specialized AI that extracts textbook metadata."},
                 {"role": "user", "content": prompt}
             ],
             model=MODEL_NAME,
+            response_model=BookMetadata,
             temperature=0.1,
-            response_format={"type": "json_object"}
+            max_retries=2
         )
-        raw_json = response.choices[0].message.content.strip()
-        metadata = json.loads(raw_json)
+        metadata = meta.model_dump()
         print(f"Extracted Metadata: {metadata}")
         return metadata
     except Exception as e:
@@ -100,9 +94,7 @@ def identify_book_metadata(pdf_path):
         return {"grade": "Unknown", "subject": "General", "title": "Untitled", "curriculum": "Unknown"}
 
 
-# ============================================================================
 # SCHEMA LOADING AND PROMPT GENERATION
-# ============================================================================
 
 def load_schema():
     """Load the curriculum schema from file."""
@@ -171,8 +163,8 @@ def generate_schema_description(schema):
     return description
 
 
-def generate_prompt_from_schema(schema, unit_name, chunk_text, chunk_index, total_chunks):
-    """Generate the extraction prompt based on the schema."""
+def generate_prompt_from_schema(schema, unit_name, chunk_text, chunk_index, total_chunks, metadata=None):
+    """Generate the extraction prompt based on the schema and dynamically identified metadata."""
     schema_desc = generate_schema_description(schema)
     
     # Get content block type enum from schema
@@ -183,13 +175,19 @@ def generate_prompt_from_schema(schema, unit_name, chunk_text, chunk_index, tota
             type_prop = content_blocks_prop["items"]["properties"].get("type", {})
             content_block_type_enum = type_prop.get("enum", ["definition", "explanation", "example"])
     
-    curriculum_type = CURRICULUM_TYPE
-    grade_level = GRADE_LEVEL
-    subject = SUBJECT
+    # Use dynamically identified metadata from the uploaded PDF; fall back to neutral generics
+    if metadata:
+        curriculum_type = metadata.get("curriculum", CURRICULUM_TYPE) or "General"
+        grade_level = metadata.get("grade", GRADE_LEVEL) or "Unknown"
+        subject = metadata.get("subject", SUBJECT) or "General"
+    else:
+        curriculum_type = CURRICULUM_TYPE
+        grade_level = GRADE_LEVEL
+        subject = SUBJECT
     subject_lower = subject.lower()
     
     prompt = f"""
-You are extracting structured curriculum data from {curriculum_type} Grade {grade_level} {subject} textbook content.
+You are extracting structured curriculum data from a {curriculum_type} Grade {grade_level} {subject} textbook.
 
 CRITICAL REQUIREMENTS:
 1. You MUST extract all required fields according to the schema - these CANNOT be empty
@@ -209,11 +207,11 @@ Extraction Rules:
 
 For each topic found, extract according to the schema:
 1. topic_id: A unique identifier (e.g., "topic_1", "topic_2")
-2. topic_name: The specific mathematical topic name (e.g., "Rational Numbers", "Linear Equations", "Quadrilaterals")
+2. topic_name: The specific topic name from the textbook
 3. unit: The unit name (use: "{unit_name}")
 4. learning_objectives: Array of specific learning objectives - MUST extract at least 2-3 objectives per topic
-5. allowed_concepts: Array of mathematical concepts taught/mentioned - MUST include all relevant concepts (minimum 3-5 per topic)
-6. disallowed_concepts: Array of advanced concepts that should NOT be introduced - include concepts beyond Grade 8 level
+5. allowed_concepts: Array of concepts taught/mentioned - MUST include all relevant concepts (minimum 3-5 per topic)
+6. disallowed_concepts: Array of advanced concepts that should NOT be introduced - include concepts beyond current level
 7. content_blocks: Array of content blocks, each with:
    - block_id: Unique identifier starting from "block_1", "block_2", etc. (sequential)
    - type: One of {content_block_type_enum}
@@ -228,8 +226,6 @@ IMPORTANT:
 - All required fields MUST be present and non-empty
 - Extract actual learning goals and concepts from the text
 - If a topic doesn't have explicit objectives, infer reasonable learning objectives based on the content
-- Identify {subject_lower} concepts mentioned in the text for allowed_concepts
-- For disallowed_concepts, think about what advanced topics should NOT be covered at Grade {grade_level} level
 - The output MUST strictly conform to the schema structure
 
 Return format (JSON array):
@@ -238,25 +234,13 @@ Return format (JSON array):
     "topic_id": "topic_1",
     "topic_name": "Specific Topic Name",
     "unit": "{unit_name}",
-    "learning_objectives": ["Students will understand...", "Students will be able to...", "Students will learn..."],
-    "allowed_concepts": ["concept1", "concept2", "concept3", "concept4"],
-    "disallowed_concepts": ["advanced_concept1", "advanced_concept2"],
+    "learning_objectives": ["Students will understand...", "Students will be able to..."],
+    "allowed_concepts": ["concept1", "concept2", "concept3"],
+    "disallowed_concepts": ["advanced_concept1"],
     "content_blocks": [
-      {{
-        "block_id": "block_1",
-        "type": "definition",
-        "text": "Exact definition text from source"
-      }},
-      {{
-        "block_id": "block_2",
-        "type": "explanation",
-        "text": "Exact explanation text from source"
-      }},
-      {{
-        "block_id": "block_3",
-        "type": "example",
-        "text": "Exact example text from source"
-      }}
+      {{"block_id": "block_1", "type": "definition", "text": "Exact definition text"}},
+      {{"block_id": "block_2", "type": "explanation", "text": "Exact explanation text"}},
+      {{"block_id": "block_3", "type": "example", "text": "Exact example text"}}
     ]
   }}
 ]
@@ -269,9 +253,7 @@ Text:
     return prompt
 
 
-# ============================================================================
 # PDF TO TEXT FUNCTIONS (from pdf_to_text.py)
-# ============================================================================
 
 def extract_text(pdf_path, output_txt):
     """Extract text from a PDF file and save to text file."""
@@ -298,9 +280,7 @@ def extract_text(pdf_path, output_txt):
 
 
 
-# ============================================================================
 # TEXT TO JSON FUNCTIONS (from ai_text_to_json.py)
-# ============================================================================
 
 def load_file(path):
     """Load text from a file."""
@@ -331,87 +311,52 @@ def split_text_into_chunks(text, chunk_size=CHUNK_SIZE):
     return chunks
 
 
-def call_llm(prompt, schema=None, max_retries=3):
-    """Call Gemini API with retry logic."""
-    curriculum_type = CURRICULUM_TYPE
-    subject = SUBJECT
-    
-    # Get content block types from schema dynamically
-    content_block_types = ["definition", "explanation", "example"]
-    if schema and "properties" in schema and "content_blocks" in schema["properties"]:
-        content_blocks_prop = schema["properties"]["content_blocks"]
-        if "items" in content_blocks_prop and "properties" in content_blocks_prop["items"]:
-            type_prop = content_blocks_prop["items"]["properties"].get("type", {})
-            enum_values = type_prop.get("enum", content_block_types)
-            if enum_values:
-                content_block_types = enum_values
-    
-    content_types_str = ", ".join([f"'{t}'" for t in content_block_types])
-    
+def call_llm_structured(prompt, metadata=None):
+    """Call LLM with instructor and return CurriculumTopicList object."""
+    if metadata:
+        curriculum_type = metadata.get("curriculum", CURRICULUM_TYPE) or "General"
+        subject = metadata.get("subject", SUBJECT) or "General"
+    else:
+        curriculum_type = CURRICULUM_TYPE
+        subject = SUBJECT
+
     system_instruction = (
         f"You are an information extraction system for {curriculum_type} {subject.lower()} curriculum. "
-        "Return VALID JSON ONLY matching the exact schema format. "
-        "Extract topics, learning objectives, concepts, and content blocks accurately. "
-        f"Categorize content blocks as one of: {content_types_str}."
+        "Extract topics, learning objectives, allowed concepts, disallowed concepts, and content blocks strictly matching the schema."
     )
-    full_prompt = f"{system_instruction}\n\n{prompt}"
-    
-    for attempt in range(max_retries):
-        try:
-            response = groq_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ],
-                model=MODEL_NAME,
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"  Retry {attempt + 1}/{max_retries}...")
-                continue
-            else:
-                raise e
 
-
-def process_text_chunk(chunk_text, chunk_index, total_chunks, unit_name, schema):
-    """Process a single text chunk and extract curriculum data."""
-    prompt = generate_prompt_from_schema(schema, unit_name, chunk_text, chunk_index, total_chunks)
-    
-    raw_output = call_llm(prompt, schema=schema)
-    
-    # Clean JSON output (remove markdown code blocks if present)
-    raw_output = raw_output.strip()
-    if raw_output.startswith("```json"):
-        raw_output = raw_output[7:]
-    if raw_output.startswith("```"):
-        raw_output = raw_output[3:]
-    if raw_output.endswith("```"):
-        raw_output = raw_output[:-3]
-    raw_output = raw_output.strip()
-    
+    import instructor
+    instructor_client = instructor.from_groq(groq_client)
     try:
-        # Try to parse as array directly
-        topics = json.loads(raw_output)
-        if isinstance(topics, list):
-            return topics
-        # If it's an object with a topics key, extract it
-        elif isinstance(topics, dict):
-            if "topics" in topics:
-                return topics["topics"]
-            elif "chunks" in topics:
-                return topics["chunks"]
-            else:
-                # If it's a single topic object, wrap in array
-                return [topics]
-        else:
-            return []
-    except json.JSONDecodeError as e:
-        print(f"JSON decode error: {str(e)}")
-        print(f"Raw output preview: {raw_output[:500]}...")
+        topic_list = instructor_client.chat.completions.create(
+            model=MODEL_NAME,
+            response_model=CurriculumTopicList,
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_retries=2
+        )
+        return topic_list
+    except Exception as e:
+        print(f"[Instructor Ingestion Warning] Ingestion extraction failed: {e}")
+        return None
+
+
+def process_text_chunk(chunk_text, chunk_index, total_chunks, unit_name, schema, metadata=None):
+    """Process a single text chunk and extract curriculum data."""
+    prompt = generate_prompt_from_schema(schema, unit_name, chunk_text, chunk_index, total_chunks, metadata=metadata)
+    
+    topic_list = call_llm_structured(prompt, metadata=metadata)
+    if not topic_list or not topic_list.topics:
         return []
+        
+    # Convert Pydantic models back to dictionaries for backward compatibility with downstream functions
+    topics_dicts = []
+    for topic in topic_list.topics:
+        topics_dicts.append(topic.model_dump())
+    return topics_dicts
 
 
 def merge_topics(all_topics):
@@ -531,8 +476,112 @@ def build_final_json(all_topics, pdf_filename):
         return merged_topics
 
 
-def process_single_file(text_file_path, pdf_path=None, schema=None, custom_output_base=None):
-    """Process a single text file and convert to JSON."""
+def infer_pedagogical_profile(topics_data: list, metadata: dict = None) -> dict:
+    """
+    Analyzes the extracted curriculum topics and infers their pedagogical profile
+    using LLM reasoning.
+    """
+    if not groq_client:
+        return {
+            "reasoning_style": "Analytical",
+            "pedagogy_style": ["Conceptual"],
+            "assessment_style": "Conceptual Recall",
+            "content_nature": "Theoretical"
+        }
+        
+    print("\nInferring Pedagogical Profile for curriculum...")
+    
+    # Create sample context
+    sample_context = []
+    for topic in topics_data[:3]:
+        sample_context.append(f"Topic: {topic.get('topic_name')}")
+        sample_context.append(f"Objectives: {', '.join(topic.get('learning_objectives', []))}")
+        sample_context.append(f"Allowed Concepts: {', '.join(topic.get('allowed_concepts', []))}")
+        blocks = topic.get("content_blocks", [])
+        if blocks:
+            sample_context.append(f"Sample Content: {blocks[0].get('text')[:300]}...")
+            
+    sample_text = "\n".join(sample_context)
+    subject = metadata.get("subject", "General") if metadata else "General"
+    grade = metadata.get("grade", "Unknown") if metadata else "Unknown"
+    
+    prompt = f"""
+    You are an expert cognitive learning scientist and curriculum analyst.
+    Your task is to analyze the following curriculum sample of Grade {grade} {subject} and infer its underlying pedagogical profile.
+    
+    CURRICULUM SAMPLE:
+    {sample_text[:4000]}
+    
+    INSTRUCTIONS:
+    Classify the curriculum sample along the following four axes:
+    
+    1. reasoning_style: The primary style of logical deduction or description. Must be ONE of:
+       - "Analytical" (critical analysis, logic, classification)
+       - "Procedural" (steps, code execution, algorithms, procedures)
+       - "Narrative" (chronological, stories, historical sequences)
+       - "Comparative" (comparing cases, laws, precedents, structures)
+       - "Symbolic" (equations, formulas, proofs, symbolic logic)
+       - "Causal" (cause-and-effect, science mechanisms, cycles)
+       - "Interpretive" (textual explanation, hermeneutics, legal rules)
+       
+    2. pedagogy_style: The recommended teaching approaches. Select a list of 1-3 from:
+       - "Example-Driven" (focus on worked examples or cases)
+       - "Visual" (visualize graphs, diagrams, maps, code trees)
+       - "Conceptual" (focus on definitions and theory)
+       - "Stepwise" (micro-steps, chronological flow)
+       - "Exploratory" (investigating variations, inquiry)
+       - "Debate-Oriented" (exploring opposing viewpoints)
+       - "Case-Based" (analyzing specific clinical, law, or real cases)
+       
+    3. assessment_style: The optimal way to test this knowledge. Must be ONE of:
+       - "Problem Solving" (calculations, equations, exercises)
+       - "Conceptual Recall" (identifying definitions, rules, facts)
+       - "Comparative Analysis" (contrast systems, cases, arguments)
+       - "Execution Tracing" (tracing code flow, debugging bugs)
+       - "Argument Evaluation" (evaluating positions, laws, historical reviews)
+       - "Process Understanding" (explaining cause-and-effect sequences)
+       
+    4. content_nature: The native characteristics of the text. Must be ONE of:
+       - "Technical" (code, math syntax, engineering specifications)
+       - "Theoretical" (laws, math theorems, abstract definitions)
+       - "Descriptive" (history narrations, literature themes, descriptive science)
+       - "Abstract" (philosophical arguments, high-level theories)
+       - "Sequential" (chronologies, algorithms, workflows)
+       - "Structural" (anatomy, physical maps, architecture)
+
+    OUTPUT FORMAT (JSON ONLY):
+    {{
+        "reasoning_style": "...",
+        "pedagogy_style": ["...", "..."],
+        "assessment_style": "...",
+        "content_nature": "..."
+    }}
+    """
+    try:
+        response = groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "You are a specialized Cognitive Science AI. Output ONLY valid JSON matching the format requested."},
+                {"role": "user", "content": prompt}
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+        profile_raw = response.choices[0].message.content.strip()
+        profile = json.loads(profile_raw)
+        print(f"Inferred Pedagogical Profile: {profile}")
+        return profile
+    except Exception as e:
+        print(f"Error inferring pedagogical profile: {e}. Using fallback.")
+        return {
+            "reasoning_style": "Analytical",
+            "pedagogy_style": ["Conceptual"],
+            "assessment_style": "Conceptual Recall",
+            "content_nature": "Theoretical"
+        }
+
+def process_single_file(text_file_path, pdf_path=None, schema=None, custom_output_base=None, metadata=None):
+    """Process a single text file and convert to JSON, using dynamically identified PDF metadata."""
     if schema is None:
         print("Schema not provided")
         return None
@@ -546,7 +595,11 @@ def process_single_file(text_file_path, pdf_path=None, schema=None, custom_outpu
     text = load_file(str(text_file_path))
     unit_name = text_file_path.stem  # Use filename as unit name
     
-    print(f"\nProcessing: {text_file_path.name}")
+    # Log which metadata is driving this extraction
+    if metadata:
+        print(f"\nProcessing: {text_file_path.name} | Grade {metadata.get('grade','?')} {metadata.get('subject','?')} [{metadata.get('curriculum','?')}]")
+    else:
+        print(f"\nProcessing: {text_file_path.name} (no metadata - using generic extraction)")
     print(f"   Text length: {len(text)} characters")
     print(f"   Unit: {unit_name}")
     
@@ -557,19 +610,25 @@ def process_single_file(text_file_path, pdf_path=None, schema=None, custom_outpu
     all_topics = []
     for i, chunk in enumerate(text_chunks):
         print(f"   Processing chunk {i + 1}/{len(text_chunks)}...", end=" ")
-        topics = process_text_chunk(chunk, i, len(text_chunks), unit_name, schema)
+        topics = process_text_chunk(chunk, i, len(text_chunks), unit_name, schema, metadata=metadata)
         all_topics.extend(topics)
         print(f"Extracted {len(topics)} topic(s)")
     
     # Build final JSON
     final_json = build_final_json(all_topics, pdf_filename)
     
+    # Ingest pedagogical profile inferred directly from the topics list
+    topics_list = final_json if isinstance(final_json, list) else [final_json]
+    ped_profile = infer_pedagogical_profile(topics_list, metadata)
+    for topic in topics_list:
+        topic["pedagogical_profile"] = ped_profile
+        
     # Save output - single JSON file
     if custom_output_base:
          target_dir = Path(custom_output_base) / "json_output"
     else:
          target_dir = JSON_DIR
-
+ 
     output_file = target_dir / f"{text_file_path.stem}.json"
     target_dir.mkdir(parents=True, exist_ok=True)
     
@@ -584,6 +643,15 @@ def process_single_file(text_file_path, pdf_path=None, schema=None, custom_outpu
             json.dump([final_json], f, indent=2, ensure_ascii=False)
         print(f"Saved: {output_file.name} (1 topic)")
     
+    # Trigger Persistent ChromaDB indexing
+    try:
+        from backend.core.qa import SmartQA
+        qa = SmartQA(content_dir="generated_contents")
+        qa.index_curriculum_to_chroma(str(output_file), metadata=metadata)
+        print(f"[Persistent Vector Ingestion] Successfully indexed {output_file.name} into Persistent ChromaDB.")
+    except Exception as index_err:
+        print(f"[Persistent Vector Ingestion Warning] Failed to index on-the-fly during PDF upload: {index_err}")
+        
     return output_file
 
 
@@ -592,6 +660,10 @@ def process_specific_pdf(pdf_path, schema, custom_output_base=None, metadata=Non
     if not pdf_path.exists():
         print(f"PDF file not found: {pdf_path}")
         return None
+    
+    # Dynamically identify metadata if not passed to prevent any hardcoded class/subject structures
+    if metadata is None:
+        metadata = identify_book_metadata(pdf_path)
     
     # Determine the directory structure based on metadata
     if metadata:
@@ -604,8 +676,8 @@ def process_specific_pdf(pdf_path, schema, custom_output_base=None, metadata=Non
         else:
             output_dir = GENERATED_DIR / "content" / grade / subject
     else:
-        # Fallback to legacy pathing if no metadata
-        output_dir = TEXT_DIR.parent
+        # Extreme fallback to general content dir
+        output_dir = GENERATED_DIR / "content" / "Grade_Unknown" / "General"
 
     text_dir = output_dir / "text_output"
     json_dir = output_dir / "json_output"
@@ -637,15 +709,13 @@ def process_specific_pdf(pdf_path, schema, custom_output_base=None, metadata=Non
     try:
         # Pass the calculated json_dir as custom_output_base to process_single_file
         # but process_single_file expects the PARENT of json_output.
-        return process_single_file(text_file, pdf_path, schema, custom_output_base=output_dir)
+        return process_single_file(text_file, pdf_path, schema, custom_output_base=output_dir, metadata=metadata)
     except Exception as e:
         print(f"Error processing {pdf_path.name}: {str(e)}")
         raise
 
 
-# ============================================================================
 # JSON VALIDATION FUNCTIONS (from validate_json.py)
-# ============================================================================
 
 def validate_json_file(json_file, schema_file):
     """Validate a single JSON file against the schema."""
@@ -722,9 +792,7 @@ def validate_all_json_files():
     print(f"\nValidation complete: {valid_count}/{len(json_files)} file(s) are valid")
 
 
-# ============================================================================
 # MAIN PIPELINE
-# ============================================================================
 
 def run_full_pipeline():
     """Run the complete pipeline for all PDFs: PDF  TXT  JSON  Validation"""

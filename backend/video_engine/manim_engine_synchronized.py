@@ -14,7 +14,12 @@ class SynchronizedLesson(Scene):
     
     def load_audio_timings(self):
         """Load audio timing data from centralized assets folder"""
-        timing_path = os.path.join("generated_contents", "video_assets", "narration_full_timing.json")
+        user_name = os.environ.get("USER_NAME", "")
+        if user_name:
+            timing_path = os.path.join("generated_contents", user_name, "video_assets", "narration_full_timing.json")
+        else:
+            timing_path = os.path.join("generated_contents", "video_assets", "narration_full_timing.json")
+            
         if os.path.exists(timing_path):
             with open(timing_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
@@ -29,7 +34,12 @@ class SynchronizedLesson(Scene):
     
     def construct(self):
         # Load the specification from centralized assets folder
-        spec_path = os.path.join("generated_contents", "video_assets", "lesson_spec.json")
+        user_name = os.environ.get("USER_NAME", "")
+        if user_name:
+            spec_path = os.path.join("generated_contents", user_name, "video_assets", "lesson_spec.json")
+        else:
+            spec_path = os.path.join("generated_contents", "video_assets", "lesson_spec.json")
+            
         if not os.path.exists(spec_path):
             title = Text("Error: No spec found", color=RED)
             self.add(title)

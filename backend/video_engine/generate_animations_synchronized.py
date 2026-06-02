@@ -11,14 +11,13 @@ BASE_DIR = Path(__file__).parent.parent.absolute()
 sys.path.append(str(BASE_DIR))
 sys.path.append(str(BASE_DIR / "video_engine"))
 
+from cache.redis_client import redis_client
 from tts_generator import TTSGenerator
 from video_audio_merger import merge_video_audio
 
 load_dotenv()
 
-# ============================================================================
 # LLM GENERATION
-# ============================================================================
 
 def generate_spec_with_llm(json_data, topic_index=0):
     """Generate visual spec for Manim using Gemini"""
@@ -52,7 +51,7 @@ def generate_spec_with_llm(json_data, topic_index=0):
             }},
             {{
                 "type": "analogy",
-                "concept": "Math Concept",
+                "concept": "Abstract Concept",
                 "analogy": "Real world object"
             }},
             {{
@@ -96,7 +95,7 @@ def generate_spec_with_llm(json_data, topic_index=0):
     return response.choices[0].message.content
 
 
-def generate_narration_audio():
+def generate_narration_audio(user_name="default_user"):
     """Generate TTS narration from lesson spec - THIS HAPPENS FIRST"""
     print("\n" + "="*60)
     print(" STEP 1: GENERATING NARRATION AUDIO")
@@ -105,25 +104,27 @@ def generate_narration_audio():
     print("  The video will sync to these audio timings!")
     
     try:
-        # Ensure the centralized video assets directory exists
-        video_assets_dir = Path(__file__).parent.parent.parent / "generated_contents" / "video_assets"
-        os.makedirs(video_assets_dir, exist_ok=True)
+        # CENTRALIZED DIRECTORIES DYNAMICALLY NESTED IN USER FOLDER
+        video_assets_dir = Path(__file__).parent.parent.parent / "generated_contents" / user_name / "video_assets"
+        outputs_dir = Path(__file__).parent.parent.parent / "generated_contents" / user_name / "outputs"
+        audio_segments_dir = Path(__file__).parent.parent.parent / "generated_contents" / user_name / "audio_segments"
         
-        tts_gen = TTSGenerator()
-        # Final paths in BOTH folders
-        outputs_dir = Path(__file__).parent.parent.parent / "generated_contents" / "outputs"
-        video_assets_dir = Path(__file__).parent.parent.parent / "generated_contents" / "video_assets"
-        os.makedirs(outputs_dir, exist_ok=True)
         os.makedirs(video_assets_dir, exist_ok=True)
+        os.makedirs(outputs_dir, exist_ok=True)
+        os.makedirs(audio_segments_dir, exist_ok=True)
+        
+        spec_path = video_assets_dir / "lesson_spec.json"
+        merged_output_path = video_assets_dir / "narration_full.mp3"
+        
+        tts_gen = TTSGenerator(spec_path=str(spec_path), output_dir=str(audio_segments_dir))
 
-        audio_path, duration = tts_gen.generate_full_narration(use_edge_tts=True)
+        audio_path, duration = tts_gen.generate_full_narration(use_edge_tts=True, merged_output_path=str(merged_output_path))
         
         # Sync files to video_assets
         import shutil
         src_audio = Path(audio_path)
         src_timing = src_audio.with_name("narration_full_timing.json")
         
-        # Ensure it is in video_assets (it usually already is, but this confirms)
         dest_audio = video_assets_dir / "narration_full.mp3"
         dest_timing = video_assets_dir / "narration_full_timing.json"
         
@@ -141,15 +142,20 @@ def generate_narration_audio():
         print(f"\n TTS generation failed: {e}")
         print("   Falling back to gTTS...")
         try:
-            tts_gen = TTSGenerator()
-            audio_path, duration = tts_gen.generate_full_narration(use_edge_tts=False)
+            video_assets_dir = Path(__file__).parent.parent.parent / "generated_contents" / user_name / "video_assets"
+            audio_segments_dir = Path(__file__).parent.parent.parent / "generated_contents" / user_name / "audio_segments"
+            spec_path = video_assets_dir / "lesson_spec.json"
+            merged_output_path = video_assets_dir / "narration_full.mp3"
+            
+            tts_gen = TTSGenerator(spec_path=str(spec_path), output_dir=str(audio_segments_dir))
+            audio_path, duration = tts_gen.generate_full_narration(use_edge_tts=False, merged_output_path=str(merged_output_path))
             print(f"    Narration audio generated (gTTS): {audio_path}")
             return audio_path, duration
         except Exception as e2:
             print(f"    All TTS methods failed: {e2}")
             return None, None
 
-def run_manim_synchronized():
+def run_manim_synchronized(user_name="default_user"):
     """Run Manim with synchronized timing in YouTube Shorts format"""
     print("\n" + "="*60)
     print("STEP 2: RENDERING SYNCHRONIZED ANIMATION")
@@ -158,20 +164,27 @@ def run_manim_synchronized():
     print("  Syncing: Animation timing matches audio segments")
     print("(This might take a minute)")
     
+    media_dir = os.path.join("generated_contents", user_name, "media")
+    os.makedirs(media_dir, exist_ok=True)
+    
     # Landscape dimensions with synchronized engine
     cmd = [
         sys.executable, "-m", "manim",
         "--resolution", "1920,1080",  # Landscape mode
         "--fps", "30",  # Smooth 30fps
-        "--media_dir", os.path.join("generated_contents", "media"), # Use storage folder
+        "--media_dir", media_dir, # Scoped media dir
         os.path.join("backend", "video_engine", "manim_engine_synchronized.py"),  # Use synchronized version
         "SynchronizedLesson"
     ]
     
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # Pass user_name as an env variable so the subprocess scene knows where to read timed spec from
+        env = os.environ.copy()
+        env["USER_NAME"] = user_name
+        
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
         print("\n Synchronized Animation Rendered!")
-        video_path = os.path.join("generated_contents", "media", "videos", "manim_engine_synchronized", "1080p30", "SynchronizedLesson.mp4")
+        video_path = os.path.join("generated_contents", user_name, "media", "videos", "manim_engine_synchronized", "1080p30", "SynchronizedLesson.mp4")
         print(f"Video saved to: {video_path}")
         print("  Format: Landscape 16:9 ready!")
         print("  Timing: Perfectly synced with audio!")
@@ -193,14 +206,12 @@ def run_manim_synchronized():
         print("Command not found.")
         return None
 
-def merge_video_and_audio(video_path, audio_path):
+def merge_video_and_audio(video_path, audio_path, output_path="final_video_with_narration.mp4"):
     """Merge synchronized video with narration audio"""
     print("\n" + "="*60)
     print(" STEP 3: MERGING VIDEO AND AUDIO")
     print("="*60)
     print(" Combining synchronized video with narration track")
-    
-    output_path = "final_video_with_narration.mp4"
     
     success = merge_video_audio(
         video_path=video_path,
@@ -223,7 +234,25 @@ def run_video_generator(json_path, output_dir, topic_index=0, custom_filename=No
     print("  AI EDUCATIONAL ANIMATOR WITH SYNCHRONIZED NARRATION")
     print("="*60)
     
-    # Ensure output dir exists
+    # Update Redis status to PROCESSING if custom_filename (job_id) is provided
+    status_key = None
+    if custom_filename:
+        status_key = f"video_job:{custom_filename}"
+        redis_client.set_status(status_key, "PROCESSING", ex_seconds=86400)
+        
+    # 1. Resolve user_name from json_path to create user-scoped folders
+    path_parts = Path(json_path).resolve().parts
+    user_name = "default_user"
+    for i, part in enumerate(path_parts):
+        if part == "generated_contents" and i + 1 < len(path_parts):
+            user_name = path_parts[i+1]
+            break
+            
+    print(f"Dynamic User Context Detected: {user_name}")
+    
+    # Centralized directories dynamically nested in user folder
+    user_video_assets_dir = Path(__file__).parent.parent.parent / "generated_contents" / user_name / "video_assets"
+    os.makedirs(user_video_assets_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
     
     try:
@@ -243,30 +272,19 @@ def run_video_generator(json_path, output_dir, topic_index=0, custom_filename=No
         print("="*60)
         spec_json = generate_spec_with_llm(data, topic_index)
         
-        # Save spec for Manim to read (needs to be in local dir or passed explicitly)
-        # Manim script reads 'lesson_spec.json' by default usually, let's keep it there or update manim script
-        # For safety in concurrent env, ideally we pass contents, but for MVP file is okay if serialized.
-        # We will write to current working dir where manim runs.
-        # Ensure assets directory exists using absolute path in generated_contents
-        ASSETS_DIR = Path(__file__).parent.parent.parent / "generated_contents" / "video_assets"
-        os.makedirs(ASSETS_DIR, exist_ok=True)
-        
-        spec_file_path = ASSETS_DIR / "lesson_spec.json"
+        spec_file_path = user_video_assets_dir / "lesson_spec.json"
         with open(spec_file_path, "w", encoding="utf-8") as f:
             f.write(spec_json)
         print(f"  Saved storyboard to {spec_file_path}")
         
-        # 3. Generate Narration Audio
-        # pass explicitly if needed, but current function generate_narration_audio() seems self-contained?
-        # It calls TTSGenerator. We need to check if TTSGenerator needs arguments. 
-        # It relies on 'lesson_spec.json' existing.
-        audio_path, audio_duration = generate_narration_audio()
+        # 3. Generate Narration Audio (Scoped by user_name)
+        audio_path, audio_duration = generate_narration_audio(user_name)
         
         if not audio_path:
             raise Exception("Cannot proceed without audio")
         
-        # 4. Render Synchronized Video
-        video_path = run_manim_synchronized()
+        # 4. Render Synchronized Video (Scoped by user_name)
+        video_path = run_manim_synchronized(user_name)
         
         if not video_path:
             raise Exception("Video rendering failed")
@@ -279,27 +297,37 @@ def run_video_generator(json_path, output_dir, topic_index=0, custom_filename=No
             
         final_video_dest = os.path.join(output_dir, final_video_name)
         
-        # The merge function currently writes to "final_video_with_narration.mp4"
-        # We need to move it or call merge with destination
-        merged_path = merge_video_and_audio(video_path, audio_path)
+        # Safe temp merge path inside the user's video assets directory
+        temp_merged_path = str(user_video_assets_dir / f"temp_merge_{final_video_name}")
+        merged_path = merge_video_and_audio(video_path, audio_path, output_path=temp_merged_path)
         
         if merged_path and os.path.exists(merged_path):
             import shutil
             shutil.move(merged_path, final_video_dest)
             print(f" Moved final video to: {final_video_dest}")
+            if status_key:
+                redis_client.set_status(status_key, "COMPLETED", ex_seconds=86400)
             return final_video_dest
         else:
             raise Exception("Merge returned no path")
             
     except Exception as e:
         print(f"Video Generation Failed: {e}")
+        if status_key:
+            redis_client.set_status(status_key, "FAILED", ex_seconds=86400)
         return None
 
 if __name__ == "__main__":
-    # Default test
-    # Adjusted to look in content/class7/json_output if needed, or keeping legacy test path
-    default_json = "content/class7/json_output/gegp108.json"
-    if os.path.exists(default_json):
-        run_video_generator(default_json, "generated_content")
+    # CLI usage: python generate_animations_synchronized.py <path_to_json> [output_dir]
+    if len(sys.argv) < 2:
+        print("Usage: python generate_animations_synchronized.py <path_to_json> [output_dir]")
+        print("Example: python generate_animations_synchronized.py generated_contents/user1/content/Grade_7/Math/json_output/chapter1.json output/")
+        sys.exit(1)
+
+    json_path = sys.argv[1]
+    out_dir = sys.argv[2] if len(sys.argv) > 2 else "generated_contents"
+
+    if os.path.exists(json_path):
+        run_video_generator(json_path, out_dir)
     else:
-        print("Default file not found")
+        print(f"File not found: {json_path}")

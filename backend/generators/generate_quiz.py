@@ -10,8 +10,9 @@ BASE_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(BASE_DIR))
 sys.path.append(str(BASE_DIR / "backend" / "core"))
 
-from quiz_schema import Quiz
+from backend.core.quiz_schema import Quiz
 from pydantic import ValidationError
+from backend.core.adaptive_prompts import get_generator_instructions
 
 load_dotenv()
 
@@ -24,7 +25,7 @@ HTML_TEMPLATE = """
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Class 7 Quiz</title>
+    <title>{{class_level}} Quiz</title>
     <style>
         body { font-family: 'Helvetica', 'Arial', sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 40px; }
         .header { text-align: center; border-bottom: 2px solid #2c3e50; padding-bottom: 20px; margin-bottom: 30px; }
@@ -59,7 +60,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def generate_quiz_json(topic_data):
+def generate_quiz_json(topic_data, difficulty="Beginner", class_level="7", subject="General"):
     """Generate and validate quiz JSON"""
     topic_name = topic_data['topic_name']
     objectives = "\n".join([f"- {obj}" for obj in topic_data['learning_objectives']])
@@ -67,6 +68,10 @@ def generate_quiz_json(topic_data):
     content_context = "\n".join([b['text'] for b in topic_data['content_blocks']])[:2000]
 
     top_schema = json.dumps(Quiz.model_json_schema(), indent=2)
+    
+    # Get level-aware guidance
+    profile = topic_data.get("pedagogical_profile")
+    level_guidance = get_generator_instructions(difficulty, "quiz", profile=profile)
 
     system_instruction = "You are a curriculum expert that generates valid JSON quizzes strictly following a provided schema."
 
@@ -75,8 +80,9 @@ def generate_quiz_json(topic_data):
     Do NOT return the schema itself. Return an INSTANCE of the schema.
 
     TOPIC: {topic_name}
-    CLASS LEVEL: Class 7
-    DIFFICULTY: Beginner
+    CLASS LEVEL: Class {class_level}
+    SUBJECT: {subject}
+    DIFFICULTY: {difficulty}
 
     LEARNING OBJECTIVES:
     {objectives}
@@ -84,12 +90,18 @@ def generate_quiz_json(topic_data):
     CONTEXT (from textbook):
     {content_context}
 
+    PEDAGOGICAL DIFFICULTY INSTRUCTIONS:
+    {level_guidance}
+
     Required Fields:
     - topic: "{topic_name}"
-    - class_level: "Class 7"
-    - difficulty: "Beginner"
+    - class_level: "Class {class_level}"
+    - difficulty: "{difficulty}"
     - duration_minutes: (integer 10-20)
     - questions: List of at least 5 MCQs.
+      * Each MCQ must have exactly 4 options (1 correct answer and 3 plausible distractors).
+      * Do not include duplicate options or empty options.
+      * Each question must include hint_1 and hint_2 as progressive, helpful conceptual clues to guide the student.
 
     Return JSON strictly matching this schema:
     {top_schema}
@@ -99,40 +111,27 @@ def generate_quiz_json(topic_data):
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not found in .env file")
         
+    import instructor
     from groq import Groq
-    client = Groq(api_key=api_key)
+    client = instructor.from_groq(Groq(api_key=api_key))
     
-    for attempt in range(5):
-        print(f"Generation Attempt {attempt + 1}/5 with Groq...")
-        try:
-            response = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.7,
-                response_format={"type": "json_object"}
-            )
-            
-            raw_json = response.choices[0].message.content
-            print("Validating JSON...")
-            quiz_data = json.loads(raw_json)
-            quiz = Quiz(**quiz_data)
-            print("Validation Successful!")
-            return quiz
-            
-        except json.JSONDecodeError:
-            print("Invalid JSON format")
-            print(f"Raw received: {raw_json}")
-        except ValidationError as e:
-            print(f"Pydantic Validation Failed: {e}")
-            print(f"Detailed Error: {e.json()}")
-            print(f"Raw received: {raw_json}")
-        except Exception as e:
-            print(f"Error: {e}")
-            
-    raise RuntimeError("Failed to generate valid quiz after 5 attempts")
+    print("Generating quiz with Groq and Instructor...")
+    try:
+        quiz = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            response_model=Quiz,
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_retries=2
+        )
+        print("Validation Successful!")
+        return quiz
+    except Exception as e:
+        print(f"Instructor Generation/Validation Failed: {e}")
+        raise RuntimeError(f"Failed to generate valid quiz after retries: {e}")
 
 def create_html(quiz: Quiz):
     """Render quiz HTML"""
@@ -200,7 +199,7 @@ def convert_to_pdf(html_content, output_path="quiz.pdf"):
             f.write(html_content)
         return html_path
 
-def run_quiz_generator(json_path, output_path, topic_index=0):
+def run_quiz_generator(json_path, output_path, topic_index=0, difficulty="Beginner"):
     print("="*60)
     print("STRICT QUIZ GENERATOR (Pydantic Validated)")
     print("="*60)
@@ -212,6 +211,18 @@ def run_quiz_generator(json_path, output_path, topic_index=0):
     if isinstance(data, dict):
         data = [data]
     
+    # Extract dynamic class level and subject from folder path structure
+    grade_str = "Unknown"
+    subject_str = "General"
+    path_parts = Path(json_path).resolve().parts
+    system_folders = {"json_output", "text_output", "content", "uploads", "outputs", "generated_contents"}
+    for i, part in enumerate(path_parts):
+        if part.lower().startswith("grade_"):
+            grade_str = part.replace("Grade_", "").replace("grade_", "")
+            # The folder immediately after Grade_X is typically the subject
+            if i + 1 < len(path_parts) and path_parts[i + 1].lower() not in system_folders:
+                subject_str = path_parts[i + 1]
+
     # 2. Generate Valid Quiz with Active Prevention Loop
     try:
         from backend.verifier import ContentVerifier
@@ -223,7 +234,7 @@ def run_quiz_generator(json_path, output_path, topic_index=0):
         
         for attempt in range(max_retries):
             print(f"\n--- Quiz Generation Attempt {attempt + 1}/{max_retries} ---")
-            quiz = generate_quiz_json(data[topic_index])
+            quiz = generate_quiz_json(data[topic_index], difficulty, grade_str, subject_str)
             
             # VERIFY (The Bias/Truth Layer)
             verification_result = verifier.verify(source_context, quiz.model_dump(), "Quiz")
@@ -258,15 +269,17 @@ def run_quiz_generator(json_path, output_path, topic_index=0):
         return None
 
 if __name__ == "__main__":
-    # Test with the specific requested chapter
-    default_json = os.path.join("backend", "core", "content", "class7", "json_output", "gegp107.json")
-    
-    if os.path.exists(default_json):
-        print(f"Testing Quiz Generation for: {default_json}")
-        run_quiz_generator(default_json, "test_quiz_gegp107.pdf")
+    # CLI usage: python generate_quiz.py <path_to_json> [output_pdf_name]
+    if len(sys.argv) < 2:
+        print("Usage: python generate_quiz.py <path_to_json> [output_pdf_name]")
+        print("Example: python generate_quiz.py generated_contents/user1/content/Grade_7/Math/json_output/chapter1.json quiz_output.pdf")
+        sys.exit(1)
+
+    json_path = sys.argv[1]
+    output_name = sys.argv[2] if len(sys.argv) > 2 else "test_quiz_output.pdf"
+
+    if os.path.exists(json_path):
+        print(f"Testing Quiz Generation for: {json_path}")
+        run_quiz_generator(json_path, output_name)
     else:
-        print(f"Default file not found: {default_json}")
-        # Fallback to check absolute path if running from different cwd
-        abs_path = os.path.join(os.getcwd(), "class7", "json_output", "gegp107.json")
-        if os.path.exists(abs_path):
-             run_quiz_generator(abs_path, "test_quiz_gegp107.pdf")
+        print(f"File not found: {json_path}")

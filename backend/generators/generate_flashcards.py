@@ -7,37 +7,41 @@ from dotenv import load_dotenv
 # Path patching for standalone run
 BASE_DIR = Path(__file__).parent.parent.parent.absolute()
 sys.path.append(str(BASE_DIR))
-sys.path.append(str(BASE_DIR / "backend" / "core" / "schemas"))
+sys.path.append(str(BASE_DIR / "backend" / "core"))
+from backend.core.schemas import Flashcards
+from backend.core.adaptive_prompts import get_generator_instructions
 
 load_dotenv()
 
 # Configuration
-# Removed global hardcoded paths
-# JSON_PATH = "class7/json_output/gegp105.json"
-# TOPIC_INDEX = 0
+# Paths are provided dynamically via function arguments or CLI
 
 
-def generate_cards(json_data, topic_index=0):
+def generate_cards(json_data, topic_index=0, difficulty="Beginner"):
     """Generate high-quality flashcards using Groq (Llama 3) with retries"""
-    print(" Synthesizing flashcards with Groq...")
+    print(f" Synthesizing flashcards with Groq for level: {difficulty}...")
     
     topic = json_data[topic_index]
     topic_name = topic['topic_name']
     content_text = "\n".join([b['text'] for b in topic['content_blocks']])
     
+    level_guidance = get_generator_instructions(difficulty, "flashcards")
+    
     prompt = f"""
     Create a set of educational flashcards for the topic: {json.dumps(topic_name)}.
+    
+    TARGET STUDENT LEVEL: {difficulty}
     
     SOURCE MATERIAL:
     {content_text[:4000]}
     
+    PEDAGOGICAL INSTRUCTIONS FOR THIS TIER:
+    {level_guidance}
+    
     REQUIREMENTS:
     1. Create 10-15 cards based on the depth of the material.
-    2. Include a mix of:
-       - Definitions (Q: What is X? A: ...)
-       - Concepts (Q: Why does Y happen? A: ...)
-       - Examples (Q: Solve this example... A: Solution)
-    3. Keep answers concise (under 2 sentences).
+    2. Include a mix of card types matched strictly to the target student level instructions.
+    3. Keep answers highly concise (under 2 sentences).
     
     OUTPUT JSON FORMAT ONLY:
     {{
@@ -53,34 +57,28 @@ def generate_cards(json_data, topic_index=0):
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not found in .env file")
         
+    import instructor
     from groq import Groq
-    client = Groq(api_key=api_key)
+    client = instructor.from_groq(Groq(api_key=api_key))
     
-    for attempt in range(3):
-        try:
-            print(f" Attempt {attempt+1}/3 with Groq...")
-            response = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are an expert curriculum developer. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.7,
-                response_format={"type": "json_object"}
-            )
-            
-            clean_text = response.choices[0].message.content.strip()
-            return json.loads(clean_text)
-        except json.JSONDecodeError as e:
-            print(f" Attempt {attempt+1} failed: JSON Decode Error ({str(e)}). Retrying...")
-            if attempt == 2:
-                raise RuntimeError(f"Flashcard Generation failed: {str(e)}")
-        except Exception as e:
-            print(f" Attempt {attempt+1} failed: {str(e)}. Retrying...")
-            if attempt == 2:
-                raise e
+    print("Generating flashcards with Groq and Instructor...")
+    try:
+        cards = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            response_model=Flashcards,
+            messages=[
+                {"role": "system", "content": "You are an expert curriculum developer."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_retries=2
+        )
+        return cards.model_dump()
+    except Exception as e:
+        print(f"Instructor Generation/Validation Failed: {e}")
+        raise RuntimeError(f"Failed to generate flashcards: {e}")
 
-def run_flashcard_generator(json_path, output_path=None, topic_index=0):
+def run_flashcard_generator(json_path, output_path=None, topic_index=0, difficulty="Beginner"):
     print("="*60)
     print(" FLASHCARD GENERATOR")
     print("="*60)
@@ -102,7 +100,7 @@ def run_flashcard_generator(json_path, output_path=None, topic_index=0):
     
     for attempt in range(max_retries):
         print(f"\n--- Flashcard Generation Attempt {attempt + 1}/{max_retries} ---")
-        result = generate_cards(data, topic_index)
+        result = generate_cards(data, topic_index, difficulty)
         
         # 3. VERIFY (The Bias/Truth Layer)
         verification_result = verifier.verify(source_context, result, "Flashcards")
@@ -132,9 +130,16 @@ def run_flashcard_generator(json_path, output_path=None, topic_index=0):
     return output_path
 
 if __name__ == "__main__":
-    # Test with default if exists
-    default_json = "backend/core/content/class7/json_output/gegp105.json"
-    if os.path.exists(default_json):
-        run_flashcard_generator(default_json)
+    # CLI usage: python generate_flashcards.py <path_to_json> [output_json_name]
+    if len(sys.argv) < 2:
+        print("Usage: python generate_flashcards.py <path_to_json> [output_json_name]")
+        print("Example: python generate_flashcards.py generated_contents/user1/content/Grade_7/Math/json_output/chapter1.json flashcards.json")
+        sys.exit(1)
+
+    json_path = sys.argv[1]
+    output_name = sys.argv[2] if len(sys.argv) > 2 else None
+
+    if os.path.exists(json_path):
+        run_flashcard_generator(json_path, output_name)
     else:
-        print("Default file not found.")
+        print(f"File not found: {json_path}")
