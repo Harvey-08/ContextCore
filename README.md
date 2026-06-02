@@ -8,48 +8,75 @@ ContextCore's architecture is a closed-loop, learning-aware system combining hig
 
 ```mermaid
 flowchart TD
-    subgraph INGESTION ["1. Curriculum Ingestion"]
-        PDF["Raw Textbook (PDF)"] --> EP["extract_pipeline.py<br/>(AI Extraction)"]
-        EP --> JSON["Structured Curriculum JSON"]
-        EP --> CDB["ChromaDB Vector Store"]
+    %% Define modern visual classes matching the premium dark aesthetic
+    classDef frontendNode fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f8fafc,font-weight:bold,rx:5px,ry:5px;
+    classDef gatewayNode fill:#0f172a,stroke:#34d399,stroke-width:2px,color:#f8fafc,font-weight:bold,rx:5px,ry:5px;
+    classDef logicNode fill:#0f172a,stroke:#818cf8,stroke-width:2px,color:#f8fafc,font-weight:bold,rx:5px,ry:5px;
+    classDef aiNode fill:#0f172a,stroke:#c084fc,stroke-width:2px,color:#f8fafc,font-weight:bold,rx:5px,ry:5px;
+    classDef dbNode fill:#0f172a,stroke:#fbbf24,stroke-width:2px,color:#f8fafc,font-weight:bold,rx:5px,ry:5px;
+
+    %% Subgraph Styling
+    style FRONTEND_LAYER fill:#1e293b,stroke:#475569,stroke-width:2px,color:#f1f5f9
+    style SERVICE_LAYER fill:#1e293b,stroke:#475569,stroke-width:2px,color:#f1f5f9
+    style CORE_LAYER fill:#1e293b,stroke:#475569,stroke-width:2px,color:#f1f5f9
+    style AGENT_LAYER fill:#1e293b,stroke:#475569,stroke-width:2px,color:#f1f5f9
+    style DB_LAYER fill:#1e293b,stroke:#475569,stroke-width:2px,color:#f1f5f9
+
+    subgraph FRONTEND_LAYER ["Frontend Layer - React 18"]
+        FD["Teacher Dashboard"]
+        FI["Document Ingestion Portal"]
+        FQ["Assessment Interface"]
     end
 
-    subgraph ENGINE ["2. Dynamic Learning Engines"]
-        JSON --> PE["prerequisites.py<br/>(Dependency Mapping)"]
-        JSON --> AP["adaptive_prompts.py<br/>(Pedagogical Profiling)"]
-        PE --> ROAD["Roadmap Generator"]
+    subgraph SERVICE_LAYER ["Service & Orchestration Layer - FastAPI Gateway"]
+        GW["FastAPI Application Router"]
+        VE["Synchronized Video Lesson Pipeline"]
+        GE["Resource Material Generators"]
     end
 
-    subgraph INTERFACE ["3. Active Generative Pipelines"]
-        CDB --> MB["MathBuddy RAG Chatbot"]
-        AP --> MB
-        JSON --> GEN["Resource Generators<br/>(Quiz, Flashcards, Worksheets)"]
+    subgraph CORE_LAYER ["Cognitive Learning & Personalization Engine"]
+        PE["Prerequisite Sequencing Engine"]
+        SE["Spaced Repetition Scheduler"]
+        AP["Adaptive Pedagogical Profiling"]
     end
 
-    subgraph GUARDRAILS ["4. Validation & Safety (Truth Layer)"]
-        MB --> CV["citation_validator.py<br/>(Self-Healing Loop)"]
-        CV -- "Failed (Unsupported/Out of Bounds)" --> CV_HEAL["Critique & Auto-Regenerate<br/>(Up to 3 Retries)"]
-        CV_HEAL --> MB
-        
-        GEN --> Pyd["quiz_schema.py<br/>(Pydantic Validation)"]
-        Pyd --> V["verifier.py<br/>(Groq Llama-3.3-70b Auditor)"]
-        V -- "Audit Report" --> V_LOG["Score, Bias, & Factual Logs"]
+    subgraph AGENT_LAYER ["Agentic Reasoning & Grounding Guardrails"]
+        RAG["MathBuddy Conversational RAG"]
+        CV["Self-Healing Grounding Validator"]
+        AV["Content Quality Auditor"]
     end
 
-    subgraph COGNITIVE ["5. Database & Memory Engine"]
-        CV -- "Passed" --> DB["PostgreSQL Database<br/>(SQLAlchemy models)"]
-        V_LOG --> DB
-        DB --> SE["spaced_engine.py<br/>(Stepped Mastery-Aware Confidence Caps & Ebbinghaus Forgetting Curves)"]
-        SE --> |"Retention < 50%"| REV["Today's Spaced Revision Queue"]
-        REV --> MB
-        SE -.-> VAL["validate_model_cases.py<br/>(Programmatic Math Auditor)"]
+    subgraph DB_LAYER ["Persistence, Caching & Vector Indexing"]
+        PG["PostgreSQL DB"]
+        RD["Redis Cache Store"]
+        CH["ChromaDB Vector Store"]
+        BM["BM25 Lexical Keyword Search"]
     end
 
-    style INGESTION fill:#f9fafb,stroke:#e5e7eb,stroke-width:2px
-    style ENGINE fill:#f0fdfa,stroke:#5eead4,stroke-width:2px
-    style INTERFACE fill:#f5f3ff,stroke:#c084fc,stroke-width:2px
-    style GUARDRAILS fill:#fff1f2,stroke:#fda4af,stroke-width:2px
-    style COGNITIVE fill:#eff6ff,stroke:#93c5fd,stroke-width:2px
+    %% Apply class mappings
+    class FD,FI,FQ frontendNode;
+    class GW,VE,GE gatewayNode;
+    class PE,SE,AP logicNode;
+    class RAG,CV,AV aiNode;
+    class PG,RD,CH,BM dbNode;
+
+    %% Inter-layer connections with clear labels and directions
+    FD & FI & FQ -->|REST / JWT| GW
+    GW -->|Trigger Render| VE
+    GW -->|Generate Resources| GE
+    GW -->|Orchestrate Sequencing| PE
+    PE -->|Mastery Checks| SE
+    SE -->|Calibrate Difficulty| AP
+    AP -->|Tailor Prompt Profile| RAG
+    GW -->|Run Session Chat| RAG
+    RAG -->|Verify Grounding| CV
+    CV -.->|Self-Heal Citations| RAG
+    GE -->|Quality Audit| AV
+    CV -->|Log Assessment Logs| PG
+    AV -->|Persist Audit Scores| PG
+    RAG -->|Blended Hybrid Query| CH & BM
+    GW & VE -->|Read / Write Records| PG
+    GW -->|Dashboard Session Cache| RD
 ```
 
 ## Features
